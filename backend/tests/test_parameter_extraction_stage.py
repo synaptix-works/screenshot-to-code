@@ -109,3 +109,38 @@ async def test_extracts_design_system_from_request() -> None:
     )
 
     assert extracted.design_system == "Reuse .mockup-frame"
+
+
+@pytest.mark.asyncio
+async def test_extracts_explicit_variant_models_for_axon_routing() -> None:
+    stage = ParameterExtractionStage(AsyncMock())
+    extracted = await stage.extract_and_validate(
+        {
+            "generatedCodeConfig": "react_tailwind",
+            "inputMode": "image",
+            "prompt": {"text": "rebuild", "images": [], "videos": []},
+            "variantModels": [
+                "gemini-3-flash-preview (high thinking)",
+                "claude-opus-5-5 (medium effort)",
+            ],
+        }
+    )
+
+    assert [model.value for model in extracted.variant_models_override or []] == [
+        "gemini-3-flash-preview (high thinking)",
+        "claude-opus-5-5 (medium effort)",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rejects_unknown_explicit_variant_model() -> None:
+    stage = ParameterExtractionStage(AsyncMock())
+    with pytest.raises(ValueError, match="Unsupported variant model"):
+        await stage.extract_and_validate(
+            {
+                "generatedCodeConfig": "react_tailwind",
+                "inputMode": "image",
+                "prompt": {"text": "rebuild", "images": [], "videos": []},
+                "variantModels": ["not-a-real-model"],
+            }
+        )
