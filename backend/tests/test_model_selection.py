@@ -222,3 +222,38 @@ class TestModelSelectionNoKeys:
                 anthropic_api_key=None,
                 gemini_api_key=None,
             )
+
+
+class TestAxonExplicitModelSelection:
+    def setup_method(self):
+        self.model_selector = ModelSelectionStage(AsyncMock())
+
+    @pytest.mark.asyncio
+    async def test_uses_exact_explicit_model_order(self):
+        models = await self.model_selector.select_models(
+            generation_type="create",
+            input_mode="image",
+            openai_api_key=None,
+            anthropic_api_key="anthropic-key",
+            gemini_api_key="gemini-key",
+            variant_models_override=[
+                Llm.GEMINI_3_FLASH_PREVIEW_HIGH,
+                Llm.CLAUDE_OPUS_5_5_MEDIUM,
+            ],
+        )
+        assert models == [
+            Llm.GEMINI_3_FLASH_PREVIEW_HIGH,
+            Llm.CLAUDE_OPUS_5_5_MEDIUM,
+        ]
+
+    @pytest.mark.asyncio
+    async def test_rejects_explicit_model_without_provider_key(self):
+        with pytest.raises(ValueError, match="Missing API key"):
+            await self.model_selector.select_models(
+                generation_type="create",
+                input_mode="image",
+                openai_api_key=None,
+                anthropic_api_key=None,
+                gemini_api_key="gemini-key",
+                variant_models_override=[Llm.CLAUDE_OPUS_5_5_MEDIUM],
+            )
