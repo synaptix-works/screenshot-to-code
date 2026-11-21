@@ -1,0 +1,52 @@
+name: AXON screenshot-to-code adapter
+
+on:
+  pull_request:
+    paths:
+      - "axon-adapter/**"
+      - "backend/routes/generate_code.py"
+      - "backend/tests/**"
+      - "contracts/HAOMA.md"
+      - "AXON.md"
+      - ".github/workflows/axon-adapter.yml"
+  push:
+    branches:
+      - "feat/axon-executable-adapter"
+    paths:
+      - "axon-adapter/**"
+      - "backend/routes/generate_code.py"
+      - "backend/tests/**"
+
+jobs:
+  rust-adapter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Rust formatting
+        run: cargo fmt --manifest-path axon-adapter/Cargo.toml -- --check
+      - name: Rust clippy
+        run: cargo clippy --manifest-path axon-adapter/Cargo.toml --all-targets -- -D warnings
+      - name: Rust tests
+        run: cargo test --manifest-path axon-adapter/Cargo.toml
+
+  backend-routing:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Poetry
+        run: pip install poetry
+      - name: Install backend dependencies
+        run: poetry install --no-interaction
+      - name: Full backend tests
+        run: poetry run pytest
+      - name: Pyright
+        run: poetry run pyright
