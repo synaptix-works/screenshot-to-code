@@ -5,8 +5,7 @@ on:
     paths:
       - "axon-adapter/**"
       - "backend/routes/generate_code.py"
-      - "backend/tests/test_parameter_extraction_stage.py"
-      - "backend/tests/test_model_selection.py"
+      - "backend/tests/**"
       - "contracts/HAOMA.md"
       - "AXON.md"
       - ".github/workflows/axon-adapter.yml"
@@ -16,8 +15,7 @@ on:
     paths:
       - "axon-adapter/**"
       - "backend/routes/generate_code.py"
-      - "backend/tests/test_parameter_extraction_stage.py"
-      - "backend/tests/test_model_selection.py"
+      - "backend/tests/**"
 
 jobs:
   rust-adapter:
@@ -25,7 +23,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Test Rust headless adapter
+        with:
+          components: rustfmt, clippy
+      - name: Rust formatting
+        run: cargo fmt --manifest-path axon-adapter/Cargo.toml -- --check
+      - name: Rust clippy
+        run: cargo clippy --manifest-path axon-adapter/Cargo.toml --all-targets -- -D warnings
+      - name: Rust tests
         run: cargo test --manifest-path axon-adapter/Cargo.toml
 
   backend-routing:
@@ -42,7 +46,7 @@ jobs:
         run: pip install poetry
       - name: Install backend dependencies
         run: poetry install --no-interaction
-      - name: Targeted routing tests
-        run: poetry run pytest tests/test_parameter_extraction_stage.py tests/test_model_selection.py
-      - name: Pyright changed backend
-        run: poetry run pyright routes/generate_code.py tests/test_parameter_extraction_stage.py tests/test_model_selection.py
+      - name: Full backend tests
+        run: poetry run pytest
+      - name: Pyright
+        run: poetry run pyright
