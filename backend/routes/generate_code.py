@@ -23,6 +23,7 @@ from config import (
 from custom_types import InputMode
 from llm import (
     Llm,
+    MODEL_PROVIDER,
 )
 from typing import (
     Any,
@@ -268,6 +269,7 @@ class ExtractedParams:
     should_extract_assets: bool = True
     asset_base_url: str = ""
     design_system: str | None = None
+    variant_models_override: List[Llm] | None = None
 
 
 class ParameterExtractionStage:
@@ -373,6 +375,24 @@ class ParameterExtractionStage:
             else None
         )
 
+        variant_models_override: List[Llm] | None = None
+        raw_variant_models = params.get("variantModels")
+        if raw_variant_models is not None:
+            if not isinstance(raw_variant_models, list) or not raw_variant_models:
+                await self.throw_error("variantModels must be a non-empty list")
+                raise ValueError("variantModels must be a non-empty list")
+            if len(raw_variant_models) > 8:
+                await self.throw_error("variantModels supports at most 8 entries")
+                raise ValueError("variantModels supports at most 8 entries")
+
+            by_value = {model.value: model for model in Llm}
+            variant_models_override = []
+            for raw_model in raw_variant_models:
+                if not isinstance(raw_model, str) or raw_model not in by_value:
+                    await self.throw_error(f"Unsupported variant model: {raw_model}")
+                    raise ValueError(f"Unsupported variant model: {raw_model}")
+                variant_models_override.append(by_value[raw_model])
+
         return ExtractedParams(
             stack=validated_stack,
             input_mode=validated_input_mode,
@@ -390,6 +410,7 @@ class ParameterExtractionStage:
             option_codes=option_codes,
             asset_base_url=self.asset_base_url,
             design_system=design_system,
+            variant_models_override=variant_models_override,
         )
 
     def _get_from_settings_dialog_or_env(
@@ -421,9 +442,34 @@ class ModelSelectionStage:
         openai_api_key: str | None,
         anthropic_api_key: str | None,
         gemini_api_key: str | None = None,
+        variant_models_override: List[Llm] | None = None,
     ) -> List[Llm]:
-        """Select appropriate models based on available API keys"""
+        """Select appropriate models based on available API keys.
+
+        When variant_models_override is supplied, use exactly that bounded
+        model set after verifying the required provider credentials exist.
+        """
         try:
+            if variant_models_override is not None:
+                provider_keys = {
+                    "openai": bool(openai_api_key),
+                    "anthropic": bool(anthropic_api_key),
+                    "gemini": bool(gemini_api_key),
+                }
+                missing = sorted(
+                    {
+                        MODEL_PROVIDER[model]
+                        for model in variant_models_override
+                        if not provider_keys.get(MODEL_PROVIDER[model], False)
+                    }
+                )
+                if missing:
+                    raise ValueError(
+                        "Missing API key(s) for explicit variantModels providers: "
+                        + ", ".join(missing)
+                    )
+                return list(variant_models_override)
+
             num_variants = 2 if generation_type == "update" else NUM_VARIANTS
             variant_models = self._get_variant_models(
                 generation_type,
@@ -771,9 +817,12 @@ class StatusBroadcastMiddleware(Middleware):
         assert context.extracted_params is not None
         is_video_mode = context.extracted_params.input_mode == "video"
         is_update = context.extracted_params.generation_type == "update"
-        num_variants = (
-            NUM_VARIANTS_VIDEO if is_video_mode else 2 if is_update else NUM_VARIANTS
-        )
+        if context.extracted_params.variant_models_override is not None:
+            num_variants = len(context.extracted_params.variant_models_override)
+        else:
+            num_variants = (
+                NUM_VARIANTS_VIDEO if is_video_mode else 2 if is_update else NUM_VARIANTS
+            )
 
         # Tell frontend how many variants we're using
         await context.send_message("variantCount", str(num_variants), 0)
@@ -815,6 +864,7 @@ class CodeGenerationMiddleware(Middleware):
                 openai_api_key=context.extracted_params.openai_api_key,
                 anthropic_api_key=context.extracted_params.anthropic_api_key,
                 gemini_api_key=context.extracted_params.gemini_api_key,
+                variant_models_override=context.extracted_params.variant_models_override,
             )
             if IS_DEBUG_ENABLED:
                 await context.send_message(
