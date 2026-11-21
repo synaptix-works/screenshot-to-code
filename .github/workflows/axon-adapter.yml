@@ -1,0 +1,48 @@
+name: AXON screenshot-to-code adapter
+
+on:
+  pull_request:
+    paths:
+      - "axon-adapter/**"
+      - "backend/routes/generate_code.py"
+      - "backend/tests/test_parameter_extraction_stage.py"
+      - "backend/tests/test_model_selection.py"
+      - "contracts/HAOMA.md"
+      - "AXON.md"
+      - ".github/workflows/axon-adapter.yml"
+  push:
+    branches:
+      - "feat/axon-executable-adapter"
+    paths:
+      - "axon-adapter/**"
+      - "backend/routes/generate_code.py"
+      - "backend/tests/test_parameter_extraction_stage.py"
+      - "backend/tests/test_model_selection.py"
+
+jobs:
+  rust-adapter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test Rust headless adapter
+        run: cargo test --manifest-path axon-adapter/Cargo.toml
+
+  backend-routing:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Poetry
+        run: pip install poetry
+      - name: Install backend dependencies
+        run: poetry install --no-interaction
+      - name: Targeted routing tests
+        run: poetry run pytest tests/test_parameter_extraction_stage.py tests/test_model_selection.py
+      - name: Pyright changed backend
+        run: poetry run pyright routes/generate_code.py tests/test_parameter_extraction_stage.py tests/test_model_selection.py
