@@ -116,6 +116,20 @@ fn data_url(path: &Path) -> Result<String> {
     Ok(format!("data:{mime};base64,{}", BASE64.encode(bytes)))
 }
 
+#[derive(Debug)]
+struct GenerateRequest {
+    input: PathBuf,
+    output: PathBuf,
+    backend: String,
+    stack: Stack,
+    prompt: String,
+    design_system: Option<PathBuf>,
+    models: Vec<String>,
+    extract_assets: bool,
+    generate_images: bool,
+    timeout_seconds: u64,
+}
+
 fn run_docker(project_dir: &Path, args: &[&str]) -> Result<()> {
     let status = Command::new("docker")
         .arg("compose")
@@ -129,18 +143,19 @@ fn run_docker(project_dir: &Path, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-async fn generate(
-    input: PathBuf,
-    output: PathBuf,
-    backend: String,
-    stack: Stack,
-    prompt: String,
-    design_system: Option<PathBuf>,
-    models: Vec<String>,
-    extract_assets: bool,
-    generate_images: bool,
-    timeout_seconds: u64,
-) -> Result<()> {
+async fn generate(request: GenerateRequest) -> Result<()> {
+    let GenerateRequest {
+        input,
+        output,
+        backend,
+        stack,
+        prompt,
+        design_system,
+        models,
+        extract_assets,
+        generate_images,
+        timeout_seconds,
+    } = request;
     if !input.is_file() {
         bail!("input does not exist or is not a file: {}", input.display());
     }
@@ -350,7 +365,7 @@ async fn main() -> Result<()> {
             generate_images,
             timeout_seconds,
         } => {
-            generate(
+            generate(GenerateRequest {
                 input,
                 output,
                 backend,
@@ -361,7 +376,7 @@ async fn main() -> Result<()> {
                 extract_assets,
                 generate_images,
                 timeout_seconds,
-            )
+            })
             .await?;
         }
     }
@@ -448,18 +463,18 @@ mod tests {
         let models = vec!["gemini-3-flash-preview (high thinking)".to_string()];
         let backend = spawn_mock_backend(models.clone(), "<div>Daya pilot</div>").await;
 
-        generate(
+        generate(GenerateRequest {
             input,
-            output.clone(),
+            output: output.clone(),
             backend,
-            Stack::ReactTailwind,
-            "Reconstruct".to_string(),
-            None,
-            models.clone(),
-            false,
-            false,
-            5,
-        )
+            stack: Stack::ReactTailwind,
+            prompt: "Reconstruct".to_string(),
+            design_system: None,
+            models: models.clone(),
+            extract_assets: false,
+            generate_images: false,
+            timeout_seconds: 5,
+        })
         .await
         .unwrap();
 
@@ -487,18 +502,18 @@ mod tests {
         )
         .await;
 
-        let err = generate(
+        let err = generate(GenerateRequest {
             input,
-            tmp.path().join("out"),
+            output: tmp.path().join("out"),
             backend,
-            Stack::ReactTailwind,
-            "Reconstruct".to_string(),
-            None,
-            vec!["expected-model".to_string()],
-            false,
-            false,
-            5,
-        )
+            stack: Stack::ReactTailwind,
+            prompt: "Reconstruct".to_string(),
+            design_system: None,
+            models: vec!["expected-model".to_string()],
+            extract_assets: false,
+            generate_images: false,
+            timeout_seconds: 5,
+        })
         .await
         .unwrap_err();
 
@@ -520,18 +535,18 @@ mod tests {
             tokio::time::sleep(Duration::from_secs(3)).await;
         });
 
-        let err = generate(
+        let err = generate(GenerateRequest {
             input,
-            tmp.path().join("out"),
-            format!("ws://{addr}"),
-            Stack::ReactTailwind,
-            "Reconstruct".to_string(),
-            None,
-            vec!["expected-model".to_string()],
-            false,
-            false,
-            1,
-        )
+            output: tmp.path().join("out"),
+            backend: format!("ws://{addr}"),
+            stack: Stack::ReactTailwind,
+            prompt: "Reconstruct".to_string(),
+            design_system: None,
+            models: vec!["expected-model".to_string()],
+            extract_assets: false,
+            generate_images: false,
+            timeout_seconds: 1,
+        })
         .await
         .unwrap_err();
 
