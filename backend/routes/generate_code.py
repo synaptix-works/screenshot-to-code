@@ -449,27 +449,27 @@ class ModelSelectionStage:
         When variant_models_override is supplied, use exactly that bounded
         model set after verifying the required provider credentials exist.
         """
-        try:
-            if variant_models_override is not None:
-                provider_keys = {
-                    "openai": bool(openai_api_key),
-                    "anthropic": bool(anthropic_api_key),
-                    "gemini": bool(gemini_api_key),
+        if variant_models_override is not None:
+            provider_keys = {
+                "openai": bool(openai_api_key),
+                "anthropic": bool(anthropic_api_key),
+                "gemini": bool(gemini_api_key),
+            }
+            missing = sorted(
+                {
+                    MODEL_PROVIDER[model]
+                    for model in variant_models_override
+                    if not provider_keys.get(MODEL_PROVIDER[model], False)
                 }
-                missing = sorted(
-                    {
-                        MODEL_PROVIDER[model]
-                        for model in variant_models_override
-                        if not provider_keys.get(MODEL_PROVIDER[model], False)
-                    }
+            )
+            if missing:
+                raise ValueError(
+                    "Missing API key(s) for explicit variantModels providers: "
+                    + ", ".join(missing)
                 )
-                if missing:
-                    raise ValueError(
-                        "Missing API key(s) for explicit variantModels providers: "
-                        + ", ".join(missing)
-                    )
-                return list(variant_models_override)
+            return list(variant_models_override)
 
+        try:
             num_variants = 2 if generation_type == "update" else NUM_VARIANTS
             variant_models = self._get_variant_models(
                 generation_type,
