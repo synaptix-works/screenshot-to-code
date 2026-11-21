@@ -367,3 +367,182 @@ async fn main() -> Result<()> {
     }
     Ok(())
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::accept_async;
+
+    fn write_test_png(path: &Path) {
+        const PNG: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+            0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+            0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41,
+            0x54, 0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00,
+            0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D,
+            0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
+            0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+        fs::write(path, PNG).unwrap();
+    }
+
+    async fn spawn_mock_backend(
+        reported_models: Vec<String>,
+        code: &'static str,
+    ) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+
+            let request = ws.next().await.unwrap().unwrap();
+            let payload: Value = serde_json::from_str(request.to_text().unwrap()).unwrap();
+            assert_eq!(payload["inputMode"], "image");
+            assert_eq!(payload["generatedCodeConfig"], "react_tailwind");
+
+            let requested = payload["variantModels"].as_array().unwrap();
+            assert_eq!(requested.len(), reported_models.len());
+
+            ws.send(Message::Text(
+                json!({"type":"variantCount","value":"1","variantIndex":0})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+            ws.send(Message::Text(
+                json!({
+                    "type":"variantModels",
+                    "data":{"models":reported_models},
+                    "variantIndex":0
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+            ws.send(Message::Text(
+                json!({"type":"setCode","value":code,"variantIndex":0})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+            ws.send(Message::Text(
+                json!({"type":"variantComplete","variantIndex":0})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        });
+
+        format!("ws://{addr}")
+    }
+
+    #[tokio::test]
+    async fn headless_generate_writes_variant_and_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let input = tmp.path().join("reference.png");
+        let output = tmp.path().join("out");
+        write_test_png(&input);
+
+        let models = vec!["gemini-3-flash-preview (high thinking)".to_string()];
+        let backend = spawn_mock_backend(models.clone(), "<div>Daya pilot</div>").await;
+
+        generate(
+            input,
+            output.clone(),
+            backend,
+            Stack::ReactTailwind,
+            "Reconstruct".to_string(),
+            None,
+            models.clone(),
+            false,
+            false,
+            5,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(output.join("variant-01.tsx")).unwrap(),
+            "<div>Daya pilot</div>"
+        );
+
+        let run: Value =
+            serde_json::from_slice(&fs::read(output.join("run.json")).unwrap()).unwrap();
+        assert_eq!(run["requested_models"], json!(models));
+        assert_eq!(run["reported_models"], run["requested_models"]);
+        assert_eq!(run["completed_variants"], json!([0]));
+    }
+
+    #[tokio::test]
+    async fn headless_generate_rejects_model_routing_mismatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let input = tmp.path().join("reference.png");
+        write_test_png(&input);
+
+        let backend = spawn_mock_backend(
+            vec!["unexpected-model".to_string()],
+            "<div>wrong route</div>",
+        )
+        .await;
+
+        let err = generate(
+            input,
+            tmp.path().join("out"),
+            backend,
+            Stack::ReactTailwind,
+            "Reconstruct".to_string(),
+            None,
+            vec!["expected-model".to_string()],
+            false,
+            false,
+            5,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("model routing mismatch"));
+    }
+
+    #[tokio::test]
+    async fn headless_generate_times_out() {
+        let tmp = tempfile::tempdir().unwrap();
+        let input = tmp.path().join("reference.png");
+        write_test_png(&input);
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            let _ = ws.next().await;
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        });
+
+        let err = generate(
+            input,
+            tmp.path().join("out"),
+            format!("ws://{addr}"),
+            Stack::ReactTailwind,
+            "Reconstruct".to_string(),
+            None,
+            vec!["expected-model".to_string()],
+            false,
+            false,
+            1,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.to_string().contains("timed out"));
+    }
+}
