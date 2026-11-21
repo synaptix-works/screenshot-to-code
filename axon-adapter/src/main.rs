@@ -11,7 +11,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use serde_json::{json, Value};
-use tokio::{time::{timeout, Duration}};
+use tokio::time::{timeout, Duration};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 #[derive(Parser, Debug)]
@@ -204,71 +204,71 @@ async fn generate(
         while let Some(message) = socket.next().await {
             let message = message.context("read backend websocket message")?;
             match message {
-            Message::Text(text) => {
-                let event: Value = match serde_json::from_str(&text) {
-                    Ok(value) => value,
-                    Err(_) => continue,
-                };
-                let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
-                let index = event
-                    .get("variantIndex")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0) as usize;
+                Message::Text(text) => {
+                    let event: Value = match serde_json::from_str(&text) {
+                        Ok(value) => value,
+                        Err(_) => continue,
+                    };
+                    let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
+                    let index = event
+                        .get("variantIndex")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0) as usize;
 
-                match kind {
-                    "variantCount" => {
-                        variant_count = event
-                            .get("value")
-                            .and_then(Value::as_str)
-                            .and_then(|v| v.parse::<usize>().ok());
+                    match kind {
+                        "variantCount" => {
+                            variant_count = event
+                                .get("value")
+                                .and_then(Value::as_str)
+                                .and_then(|v| v.parse::<usize>().ok());
+                        }
+                        "variantModels" => {
+                            reported_models = event
+                                .pointer("/data/models")
+                                .and_then(Value::as_array)
+                                .map(|items| {
+                                    items
+                                        .iter()
+                                        .filter_map(Value::as_str)
+                                        .map(ToOwned::to_owned)
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                        }
+                        "setCode" => {
+                            if let Some(code) = event.get("value").and_then(Value::as_str) {
+                                codes.insert(index, code.to_owned());
+                            }
+                        }
+                        "variantComplete" => {
+                            completed.insert(index);
+                        }
+                        "variantError" => {
+                            let reason = event
+                                .get("value")
+                                .and_then(Value::as_str)
+                                .unwrap_or("variant failed")
+                                .to_owned();
+                            failed.insert(index, reason);
+                            completed.insert(index);
+                        }
+                        "error" => {
+                            let reason = event
+                                .get("value")
+                                .and_then(Value::as_str)
+                                .unwrap_or("generation failed");
+                            bail!("screenshot-to-code backend error: {reason}");
+                        }
+                        _ => {}
                     }
-                    "variantModels" => {
-                        reported_models = event
-                            .pointer("/data/models")
-                            .and_then(Value::as_array)
-                            .map(|items| {
-                                items
-                                    .iter()
-                                    .filter_map(Value::as_str)
-                                    .map(ToOwned::to_owned)
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                    }
-                    "setCode" => {
-                        if let Some(code) = event.get("value").and_then(Value::as_str) {
-                            codes.insert(index, code.to_owned());
+
+                    if let Some(expected) = variant_count {
+                        if completed.len() >= expected {
+                            let _ = socket.close(None).await;
+                            break;
                         }
                     }
-                    "variantComplete" => {
-                        completed.insert(index);
-                    }
-                    "variantError" => {
-                        let reason = event
-                            .get("value")
-                            .and_then(Value::as_str)
-                            .unwrap_or("variant failed")
-                            .to_owned();
-                        failed.insert(index, reason);
-                        completed.insert(index);
-                    }
-                    "error" => {
-                        let reason = event
-                            .get("value")
-                            .and_then(Value::as_str)
-                            .unwrap_or("generation failed");
-                        bail!("screenshot-to-code backend error: {reason}");
-                    }
-                    _ => {}
                 }
-
-                if let Some(expected) = variant_count {
-                    if completed.len() >= expected {
-                        let _ = socket.close(None).await;
-                        break;
-                    }
-                }
-            }
                 Message::Close(_) => break,
                 _ => {}
             }
@@ -368,7 +368,6 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,23 +376,16 @@ mod tests {
 
     fn write_test_png(path: &Path) {
         const PNG: &[u8] = &[
-            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-            0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
-            0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41,
-            0x54, 0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00,
-            0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D,
-            0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
-            0x44, 0xAE, 0x42, 0x60, 0x82,
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08,
+            0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D,
+            0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
         ];
         fs::write(path, PNG).unwrap();
     }
 
-    async fn spawn_mock_backend(
-        reported_models: Vec<String>,
-        code: &'static str,
-    ) -> String {
+    async fn spawn_mock_backend(reported_models: Vec<String>, code: &'static str) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
 
