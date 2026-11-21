@@ -11,6 +11,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use serde_json::{json, Value};
+use tokio::{time::{timeout, Duration}};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 #[derive(Parser, Debug)]
@@ -56,6 +57,9 @@ enum Commands {
         extract_assets: bool,
         #[arg(long, default_value_t = false)]
         generate_images: bool,
+        /// Hard ceiling for a complete generation request.
+        #[arg(long, default_value_t = 900)]
+        timeout_seconds: u64,
     },
 }
 
@@ -135,6 +139,7 @@ async fn generate(
     models: Vec<String>,
     extract_assets: bool,
     generate_images: bool,
+    timeout_seconds: u64,
 ) -> Result<()> {
     if !input.is_file() {
         bail!("input does not exist or is not a file: {}", input.display());
@@ -195,9 +200,10 @@ async fn generate(
     let mut variant_count: Option<usize> = None;
     let mut reported_models = Vec::new();
 
-    while let Some(message) = socket.next().await {
-        let message = message.context("read backend websocket message")?;
-        match message {
+    let receive = async {
+        while let Some(message) = socket.next().await {
+            let message = message.context("read backend websocket message")?;
+            match message {
             Message::Text(text) => {
                 let event: Value = match serde_json::from_str(&text) {
                     Ok(value) => value,
@@ -263,9 +269,23 @@ async fn generate(
                     }
                 }
             }
-            Message::Close(_) => break,
-            _ => {}
+                Message::Close(_) => break,
+                _ => {}
+            }
         }
+        Ok::<(), anyhow::Error>(())
+    };
+
+    timeout(Duration::from_secs(timeout_seconds), receive)
+        .await
+        .map_err(|_| anyhow::anyhow!("generation timed out after {timeout_seconds}s"))??;
+
+    if !models.is_empty() && reported_models != models {
+        bail!(
+            "backend model routing mismatch: requested {:?}, reported {:?}",
+            models,
+            reported_models
+        );
     }
 
     if codes.is_empty() {
@@ -328,6 +348,7 @@ async fn main() -> Result<()> {
             models,
             extract_assets,
             generate_images,
+            timeout_seconds,
         } => {
             generate(
                 input,
@@ -339,6 +360,7 @@ async fn main() -> Result<()> {
                 models,
                 extract_assets,
                 generate_images,
+                timeout_seconds,
             )
             .await?;
         }
